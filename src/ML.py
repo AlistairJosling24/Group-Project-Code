@@ -1,83 +1,99 @@
-import pandas as pd
-import yfinance as yf
-import feedparser
-import json
 import os
-from datetime import datetime, timezone
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import time
+import json
+import requests
+import pandas as pd
+from datetime import datetime
+
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 
-# --- CONFIGURATION ---
 tickers = ["AAPL", "MSFT", "TSLA"]
-startdate = "2021-01-01"
+
 buythresh = 0.60
 sellthresh = 0.40
 trainratio = 0.80
-rssurl = "https://feeds.finance.yahoo.com/rss/2.0/headline?s=AAPL,MSFT,TSLA&region=US&lang=en-US"
 
-# --- DATA DOWNLOAD ---
-print("Downloading market data...")
-analyzer = SentimentIntensityAnalyzer()
-# threads=False prevents the 'database is locked' error in Python 3.14
-raw = yf.download(tickers, start=startdate, progress=False, group_by="ticker", threads=False)
+apikey = os.getenv("ALPHAVANTAGE_API_KEY")
+baseurl = "https://www.alphavantage.co/query"
+sleepsecs = 12  
+cachefile = "prices_cache.csv"
 
-rows = []
-for t in tickers:
-    try:
-        if len(tickers) == 1:
-            tmp = raw.reset_index()
-        else:
-            if t not in raw.columns.get_level_values(0):
-                continue
-            tmp = raw[t].reset_index()
-        
-        tmp["ticker"] = t
-        tmp = tmp.rename(columns={"Date": "dt"})
-        rows.append(tmp[["dt", "ticker", "Close"]])
-    except Exception as e:
-        print(f"Skipping {t} due to error: {e}")
+file_path = r"C:/Users/alist/ai-finance-ui/src/marketData.json"
 
-if not rows:
-    print("Critical Error: No data could be downloaded.")
+if not apikey:
+    print("Error: ALPHAVANTAGE_API_KEY not set.")
     exit()
 
-df = pd.concat(rows, ignore_index=True)
-df["dt"] = pd.to_datetime(df["dt"])
-df = df.sort_values(["dt", "ticker"]).copy()
+print("Getting price data from Alpha Vantage...")
 
-# --- FEATURE ENGINEERING ---
+allrows = []
+for i, tkr in enumerate(tickers):
+    url = (
+        f"{baseurl}?function=TIME_SERIES_DAILY"
+        f"&symbol={tkr}&outputsize=compact&apikey={apikey}"
+    )
+    r = requests.get(url)
+    data = r.json()
+
+    ts = data.get("Time Series (Daily)", {})
+    for dt_str, vals in ts.items():
+        allrows.append({
+            "dt": dt_str,
+            "ticker": tkr,
+            "Close": float(vals["4. close"])
+        })
+    if i < len(tickers) - 1:
+        time.sleep(sleepsecs)
+
+newdf = pd.DataFrame(allrows)
+if newdf.empty:
+    print("No price data received.")
+    exit()
+
+newdf["dt"] = pd.to_datetime(newdf["dt"])
+newdf = newdf.sort_values(["ticker", "dt"])
+if os.path.exists(cachefile):
+    old = pd.read_csv(cachefile, parse_dates=["dt"])
+    df = pd.concat([old, newdf], ignore_index=True)
+else:
+    df = newdf.copy()
+
+df = df.drop_duplicates(subset=["dt", "ticker"]).sort_values(["ticker", "dt"]).reset_index(drop=True)
+df.to_csv(cachefile, index=False)
 df["returnday1"] = df.groupby("ticker")["Close"].pct_change(1)
 df["fwdret"] = df.groupby("ticker")["Close"].shift(-1) / df["Close"] - 1.0
 df["yup"] = (df["fwdret"] > 0).astype(int)
+print("Getting news sentiment...")
 
-# --- SENTIMENT ANALYSIS ---
-print("Fetching news headlines...")
-feed = feedparser.parse(rssurl)
+time.sleep(sleepsecs)  # just to avoid rate limit after price calls
+
+newsurl = (
+    f"{baseurl}?function=NEWS_SENTIMENT"
+    f"&tickers={','.join(tickers)}&sort=LATEST&limit=200&apikey={apikey}"
+)
+newsdata = requests.get(newsurl).json()
+
 newsrows = []
-for e in getattr(feed, "entries", []):
-    title = getattr(e, "title", "")
-    titlel = title.lower()
-    
-    dt = None
-    for key in ["publishedparsed", "updatedparsed"]:
-        t = getattr(e, key, None)
-        if t:
-            dt = datetime(*t[:6], tzinfo=timezone.utc).date()
-            break
-    if dt is None:
-        dt = datetime.now(timezone.utc).date()
+feed = newsdata.get("feed", [])
+for item in feed:
+    tpub = item.get("time_published", "")
+    if len(tpub) >= 8:
+        dt = datetime.strptime(tpub[:8], "%Y%m%d").date()
+    else:
+        dt = datetime.utcnow().date()
 
-    sent = analyzer.polarity_scores(title)["compound"]
-    matched = []
-    if "apple" in titlel or "aapl" in titlel: matched.append("AAPL")
-    if "microsoft" in titlel or "msft" in titlel: matched.append("MSFT")
-    if "tesla" in titlel or "tsla" in titlel: matched.append("TSLA")
-
-    for tkr in matched:
-        newsrows.append({"dt": dt, "ticker": tkr, "sentiment": sent})
+    for tsent in item.get("ticker_sentiment", []):
+        tkr = tsent.get("ticker")
+        if tkr in tickers:
+            try:
+                score = float(tsent.get("ticker_sentiment_score", 0))
+            except:
+                score = 0.0
+            newsrows.append({"dt": dt, "ticker": tkr, "sentiment": score})
 
 news = pd.DataFrame(newsrows)
+
 if news.empty:
     agg = pd.DataFrame(columns=["dt", "ticker", "newscount", "newssent"])
 else:
@@ -85,17 +101,17 @@ else:
         newscount=("sentiment", "count"),
         newssent=("sentiment", "mean"),
     )
-
 df["dtdate"] = df["dt"].dt.date
-df = df.merge(agg, left_on=["dtdate", "ticker"], right_on=["dt", "ticker"], how="left", suffixes=('', '_y'))
+df = df.merge(agg, left_on=["dtdate", "ticker"], right_on=["dt", "ticker"], how="left")
+
 df["newscount"] = df["newscount"].fillna(0).astype(int)
 df["newssent"] = df["newssent"].fillna(0.0)
 df = df.dropna(subset=["returnday1", "yup"]).copy()
+df = df.sort_values(["dt", "ticker"]).copy()
 
-# --- MACHINE LEARNING ---
 features = ["returnday1", "newscount", "newssent"]
 X = df[features]
-y = df["yup"]
+y = df["yup"].astype(int)
 
 splitidx = int(len(df) * trainratio)
 Xtrain, Xtest = X.iloc[:splitidx], X.iloc[splitidx:]
@@ -104,45 +120,56 @@ ytrain, ytest = y.iloc[:splitidx], y.iloc[splitidx:]
 model = LogisticRegression(max_iter=500)
 model.fit(Xtrain, ytrain)
 
-# --- PREDICTIONS & EXPORT ---
+pred = model.predict(Xtest)
+acc = accuracy_score(ytest, pred)
+
+baseline = [1] * len(ytest)
+baselineacc = accuracy_score(ytest, baseline)
+
+print(f"model accuracy:    {acc:.3f}")
+print(f"baseline accuracy: {baselineacc:.3f}")
 latest = df.sort_values(["ticker", "dt"]).groupby("ticker", as_index=False).tail(1).copy()
 latest["probup"] = model.predict_proba(latest[features])[:, 1]
 
-def get_signal(p):
-    if p >= buythresh: return "BUY"
-    if p <= sellthresh: return "SELL"
+def getsignal(p):
+    if p >= buythresh:
+        return "BUY"
+    if p <= sellthresh:
+        return "SELL"
     return "HOLD"
 
-latest["signal"] = latest["probup"].apply(get_signal)
-
-# Prepare JSON for React Frontend
-market_data_export = {}
+latest["signal"] = latest["probup"].apply(getsignal)
+export = {}
 for tkr in tickers:
-    tkr_df = df[df['ticker'] == tkr].tail(15)
-    tkr_latest = latest[latest['ticker'] == tkr].iloc[0]
-    
-    # Logic for UI prediction line: if BUY, predict +2%, if SELL -2%, else flat
-    last_price = float(tkr_df['Close'].iloc[-1])
-    if tkr_latest['signal'] == "BUY":
+    tkr_df = df[df["ticker"] == tkr].tail(15)
+    if tkr_df.empty:
+        continue
+
+    row = latest[latest["ticker"] == tkr].iloc[0]
+    last_price = float(tkr_df["Close"].iloc[-1])
+    if row["signal"] == "BUY":
         pred_price = last_price * 1.02
-    elif tkr_latest['signal'] == "SELL":
+    elif row["signal"] == "SELL":
         pred_price = last_price * 0.98
     else:
         pred_price = last_price
 
-    market_data_export[tkr] = {
-        "labels": tkr_df['dt'].dt.strftime('%b %d').tolist(),
-        "historical": tkr_df['Close'].round(2).tolist(),
+    export[tkr] = {
+        "labels": pd.to_datetime(tkr_df["dt"]).dt.strftime("%b %d").tolist(),
+        "historical": tkr_df["Close"].round(2).tolist(),
         "predicted": round(pred_price, 2),
-        "signal": tkr_latest['signal'],
-        "confidence": round(float(tkr_latest['probup']) * 100, 1),
-        "sentiment": "Positive" if tkr_latest['newssent'] > 0 else "Neutral/Negative"
+        "signal": row["signal"],
+        "confidence": round(float(row["probup"]) * 100, 1),
+        "sentiment": "Positive" if float(row["newssent"]) > 0 else "Neutral/Negative",
     }
 
-# Save the file to the 'src' directory so React can find it
-file_path = "C:/Users/alist/ai-finance-ui/src/marketData.json" 
-with open(file_path, 'w') as f:
-    json.dump(market_data_export, f, indent=2)
+try:
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, "w") as f:
+        json.dump(export, f, indent=2)
+    print("Saved JSON to:", file_path)
+except Exception as e:
+    print("Could not save JSON:", e)
 
-print(f"✅ Success! Data exported to {file_path}")
-print(latest[["ticker", "probup", "signal"]])
+print("\nSignals:")
+print(latest[["ticker", "probup", "signal"]].to_string(index=False))
