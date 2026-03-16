@@ -1,3 +1,4 @@
+def run_model():
 import os
 import time
 import json
@@ -62,6 +63,7 @@ else:
 df = df.drop_duplicates(subset=["dt", "ticker"]).sort_values(["ticker", "dt"]).reset_index(drop=True)
 df.to_csv(cachefile, index=False)
 df["returnday1"] = df.groupby("ticker")["Close"].pct_change(1)
+df["returnday5"] = df.groupby("ticker")["Close"].pct_change(5)
 df["fwdret"] = df.groupby("ticker")["Close"].shift(-1) / df["Close"] - 1.0
 df["yup"] = (df["fwdret"] > 0).astype(int)
 print("Getting news sentiment...")
@@ -95,21 +97,26 @@ for item in feed:
 news = pd.DataFrame(newsrows)
 
 if news.empty:
-    agg = pd.DataFrame(columns=["dt", "ticker", "newscount", "newssent"])
+    agg = pd.DataFrame(columns=["dt", "ticker", "newscount", "newssent", "newssent3day"])
 else:
     agg = news.groupby(["dt", "ticker"], as_index=False).agg(
         newscount=("sentiment", "count"),
         newssent=("sentiment", "mean"),
+    )
+    agg = agg.sort_values(["ticker", "dt"])
+    agg["newssent3day"] = agg.groupby("ticker")["newssent"].transform(
+        lambda s: s.rolling(3).mean()
     )
 df["dtdate"] = df["dt"].dt.date
 df = df.merge(agg, left_on=["dtdate", "ticker"], right_on=["dt", "ticker"], how="left")
 
 df["newscount"] = df["newscount"].fillna(0).astype(int)
 df["newssent"] = df["newssent"].fillna(0.0)
-df = df.dropna(subset=["returnday1", "yup"]).copy()
+df["newssent3day"] = df["newssent3day"].fillna(0.0)
+df = df.dropna(subset=["returnday1", "returnday5", "yup"]).copy()
 df = df.sort_values(["dt", "ticker"]).copy()
 
-features = ["returnday1", "newscount", "newssent"]
+df = df.dropna(subset=["returnday1", "returnday5", "yup"]).copy()
 X = df[features]
 y = df["yup"].astype(int)
 
@@ -169,6 +176,7 @@ try:
         json.dump(export, f, indent=2)
     print("Saved JSON to:", file_path)
 except Exception as e:
+    return export
     print("Could not save JSON:", e)
 
 print("\nSignals:")
