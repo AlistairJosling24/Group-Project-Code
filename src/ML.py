@@ -13,7 +13,7 @@ def run_model():
     apikey = os.getenv("ALPHAVANTAGE_API_KEY") or "PASTE_YOUR_KEY_HERE"
 
     baseurl = "https://www.alphavantage.co/query"
-    sleepsecs = 1
+    sleepsecs = 12
 
     file_path = "./src/marketData.json"
 
