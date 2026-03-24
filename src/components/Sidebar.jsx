@@ -1,5 +1,5 @@
 export default function Sidebar({ market, setMarket }) {
-  const markets = ["AAPL", "MSFT", "TSLA"];
+  const markets = ["AAPL","MSFT","TSLA","GOOGL","AMZN","NVDA","META","JPM","TSM"];
 
   return (
     <aside style={styles.sidebar}>
