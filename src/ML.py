@@ -127,7 +127,17 @@ from datetime import datetime
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 
-tickers = ["AAPL", "MSFT", "TSLA"]
+tickers = [
+    "AAPL",
+    "MSFT",
+    "TSLA",
+    "GOOGL",
+    "AMZN",
+    "NVDA",
+    "META",
+    "JPM",
+    "TSM"
+]
 
 buythresh = 0.60
 sellthresh = 0.40
@@ -190,7 +200,10 @@ time.sleep(sleepsecs)  # just to avoid rate limit after price calls
 
 newsurl = (
     f"{baseurl}?function=NEWS_SENTIMENT"
-    f"&tickers={','.join(tickers)}&sort=LATEST&limit=200&apikey={apikey}"
+    f"&tickers={','.join(tickers)}"
+    f"&sort=LATEST"
+    f"&limit=200"
+    f"&apikey={apikey}"
 )
 newsdata = requests.get(newsurl).json()
 
