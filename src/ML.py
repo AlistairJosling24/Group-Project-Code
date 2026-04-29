@@ -1,197 +1,193 @@
+import os
+import json
+import pandas as pd
+import yfinance as yf
+from sklearn.ensemble import RandomForestClassifier
+
 def run_model():
     print("🚀 MODEL STARTED")
 
-    import os, time, json, requests
-    import pandas as pd
-    from datetime import datetime
-    from sklearn.linear_model import LogisticRegression
+    tickers = [
+        "AAPL", "MSFT", "TSLA", "GOOGL", "AMZN",
+        "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "DOGE-USD"
+    ]
 
-    tickers = ["AAPL", "MSFT", "TSLA"]
-    buythresh, sellthresh = 0.60, 0.40
+    file_path = os.path.join(os.path.dirname(__file__), "marketData.json")
 
-    apikey = os.getenv("ALPHAVANTAGE_API_KEY") or "PASTE_YOUR_KEY_HERE"
+    print("📊 Fetching OHLC data from Yahoo Finance...")
 
-    baseurl = "https://www.alphavantage.co/query"
-    sleepsecs = 1
-
-    file_path = "./src/marketData.json"
-
-    # =========================
-    # 📊 FETCH PRICE DATA
-    # =========================
-    print("📊 Fetching price data...")
+    data = yf.download(tickers, period="3mo", interval="1d", group_by="ticker")
 
     allrows = []
-    for i, tkr in enumerate(tickers):
-        url = f"{baseurl}?function=TIME_SERIES_DAILY&symbol={tkr}&outputsize=compact&apikey={apikey}"
-        data = requests.get(url).json()
 
-        if "Time Series (Daily)" not in data:
-            print(f"❌ API error for {tkr}:", data)
-            return
+    # =========================
+    # 📊 EXTRACT OHLC DATA
+    # =========================
+    for tkr in tickers:
+        try:
+            df_tkr = data[tkr].dropna()
 
-        for dt_str, vals in data["Time Series (Daily)"].items():
-            allrows.append({
-                "dt": dt_str,
-                "ticker": tkr,
-                "Close": float(vals["4. close"])
-            })
+            for dt, row in df_tkr.iterrows():
+                allrows.append({
+                    "dt": dt,
+                    "ticker": tkr,
+                    "Open": float(row["Open"]),
+                    "High": float(row["High"]),
+                    "Low": float(row["Low"]),
+                    "Close": float(row["Close"])
+                })
 
-        if i < len(tickers) - 1:
-            time.sleep(sleepsecs)
+        except Exception as e:
+            print(f"⚠️ Skipping {tkr}: {e}")
 
     df = pd.DataFrame(allrows)
 
     if df.empty:
-        print("❌ No price data fetched")
+        print("❌ No data fetched")
         return
-
-    print(f"✅ Price rows: {len(df)}")
 
     df["dt"] = pd.to_datetime(df["dt"])
     df = df.sort_values(["ticker", "dt"])
 
     # =========================
-    # ⚙️ FEATURES
+    # 🔥 FEATURES
     # =========================
-    df["returnday1"] = df.groupby("ticker")["Close"].pct_change(1)
-    df["returnday5"] = df.groupby("ticker")["Close"].pct_change(5)
-    df["fwdret"] = df.groupby("ticker")["Close"].shift(-1) / df["Close"] - 1
-    df["yup"] = (df["fwdret"] > 0).astype(int)
+    df["ret1"] = df.groupby("ticker")["Close"].pct_change(1)
+    df["ret3"] = df.groupby("ticker")["Close"].pct_change(3)
+    df["ret7"] = df.groupby("ticker")["Close"].pct_change(7)
 
-    # =========================
-    # 📰 NEWS
-    # =========================
-    print("📰 Fetching news...")
+    df["ma5"] = df.groupby("ticker")["Close"].rolling(5).mean().reset_index(0, drop=True)
+    df["ma10"] = df.groupby("ticker")["Close"].rolling(10).mean().reset_index(0, drop=True)
+    df["ma20"] = df.groupby("ticker")["Close"].rolling(20).mean().reset_index(0, drop=True)
 
-    newsurl = f"{baseurl}?function=NEWS_SENTIMENT&tickers={','.join(tickers)}&apikey={apikey}"
-    newsdata = requests.get(newsurl).json()
+    df["momentum"] = df["Close"] - df["ma10"]
 
-    newsrows = []
-    for item in newsdata.get("feed", []):
-        try:
-            dt = datetime.strptime(item["time_published"][:8], "%Y%m%d").date()
-        except:
-            continue
+    df["volatility"] = df.groupby("ticker")["Close"].pct_change().rolling(5).std().reset_index(0, drop=True)
 
-        for tsent in item.get("ticker_sentiment", []):
-            newsrows.append({
-                "dt": dt,
-                "ticker": tsent.get("ticker"),
-                "sentiment": float(tsent.get("ticker_sentiment_score", 0))
-            })
+    df["future"] = df.groupby("ticker")["Close"].shift(-1)
+    df["y"] = (df["future"] > df["Close"]).astype(int)
 
-    news = pd.DataFrame(newsrows)
+    df = df.dropna()
 
-    if news.empty:
-        print("⚠️ No news data found")
-        agg = pd.DataFrame(columns=["dt", "ticker", "newscount", "newssent", "newssent3day"])
-    else:
-        agg = news.groupby(["dt", "ticker"], as_index=False).agg(
-            newscount=("sentiment", "count"),
-            newssent=("sentiment", "mean"),
-        )
-
-        agg = agg.sort_values(["ticker", "dt"])
-
-        agg["newssent3day"] = agg.groupby("ticker")["newssent"].transform(
-            lambda s: s.rolling(3).mean()
-        )
+    features = [
+        "ret1", "ret3", "ret7",
+        "ma5", "ma10", "ma20",
+        "momentum",
+        "volatility"
+    ]
 
     # =========================
-    # 🔗 MERGE
+    # 🤖 TRAIN MODELS
     # =========================
-    df["dtdate"] = df["dt"].dt.date
-
-    df = df.merge(
-        agg,
-        left_on=["dtdate", "ticker"],
-        right_on=["dt", "ticker"],
-        how="left"
-    )
-
-    df["newscount"] = df["newscount"].fillna(0)
-    df["newssent"] = df["newssent"].fillna(0)
-    df["newssent3day"] = df["newssent3day"].fillna(0)
-
-    df = df.dropna(subset=["returnday1", "returnday5"])
-
-    # =========================
-    # 🤖 TRAIN MODEL PER STOCK
-    # =========================
-    print("🤖 Training models per stock...")
-
-    features = ["returnday1", "returnday5", "newscount", "newssent", "newssent3day"]
+    print("🤖 Training models...")
 
     models = {}
+    accuracies = {}
 
     for tkr in tickers:
         sub = df[df["ticker"] == tkr]
 
-        X = sub[features]
-        y = sub["yup"]
+        if len(sub) < 30:
+            print(f"⚠️ Skipping {tkr}")
+            continue
 
-        model = LogisticRegression(max_iter=500)
-        model.fit(X, y)
+        split = int(len(sub) * 0.8)
+
+        X_train = sub[features][:split]
+        y_train = sub["y"][:split]
+
+        X_test = sub[features][split:]
+        y_test = sub["y"][split:]
+
+        model = RandomForestClassifier(
+            n_estimators=200,
+            max_depth=6,
+            random_state=42
+        )
+
+        model.fit(X_train, y_train)
+
+        accuracy = model.score(X_test, y_test)
+        accuracies[tkr] = round(accuracy, 2)
+
+        print(f"{tkr} accuracy: {accuracy:.2f}")
 
         models[tkr] = model
 
     # =========================
-    # 📈 PREDICTIONS
+    # 📈 PREDICTIONS + EXPORT
     # =========================
     latest = df.groupby("ticker").tail(1).copy()
-
-    latest["probup"] = [
-        models[row["ticker"]].predict_proba(
-            row[features].values.reshape(1, -1)
-        )[0][1]
-        for _, row in latest.iterrows()
-    ]
-
-    def getsignal(p):
-        if p >= buythresh:
-            return "BUY"
-        if p <= sellthresh:
-            return "SELL"
-        return "HOLD"
-
-    latest["signal"] = latest["probup"].apply(getsignal)
-
-    # =========================
-    # 📦 EXPORT
-    # =========================
-    print("💾 Saving JSON...")
 
     export = {}
 
     for tkr in tickers:
-        tkr_df = df[df["ticker"] == tkr].tail(15)
+        sub = df[df["ticker"] == tkr]
 
-        if tkr_df.empty:
+        if tkr not in models:
             continue
 
-        row = latest[latest["ticker"] == tkr].iloc[0]
-        last_price = tkr_df["Close"].iloc[-1]
+        row = sub.iloc[-1]
 
-        # 🔥 Continuous prediction (no more flat lines)
-        pred_price = last_price * (1 + (row["probup"] - 0.5) * 0.5)
+        prob = models[tkr].predict_proba(
+            pd.DataFrame([row[features]])
+        )[0][1]
 
-        export[tkr] = {
-            "labels": tkr_df["dt_x"].dt.strftime("%b %d").tolist(),
-            "historical": tkr_df["Close"].round(2).tolist(),
-            "predicted": round(pred_price, 2),
-            "signal": row["signal"],
-            "confidence": round(row["probup"] * 100, 1),
-            "sentiment": "Positive" if row["newssent"] > 0 else "Neutral/Negative",
+        # signal
+        if prob > 0.65:
+            signal = "BUY"
+        elif prob < 0.35:
+            signal = "SELL"
+        else:
+            signal = "HOLD"
+
+        hist = sub.tail(15)
+
+        last_price = hist["Close"].iloc[-1]
+
+        predicted = last_price * (1 + (prob - 0.5) * 0.2)
+
+        confidence = abs(prob - 0.5) * 200
+
+        display = tkr.replace("-USD", "")
+
+        # 🔥 REAL CANDLE DATA
+        ohlc_data = [
+            {
+                "time": d.strftime("%Y-%m-%d"),
+                "open": float(o),
+                "high": float(h),
+                "low": float(l),
+                "close": float(c)
+            }
+            for d, o, h, l, c in zip(
+                hist["dt"],
+                hist["Open"],
+                hist["High"],
+                hist["Low"],
+                hist["Close"]
+            )
+        ]
+
+        export[display] = {
+            "labels": hist["dt"].dt.strftime("%b %d").tolist(),
+            "historical": hist["Close"].round(2).tolist(),
+            "ohlc": ohlc_data,  # 🔥 NEW
+            "predicted": round(predicted, 2),
+            "signal": signal,
+            "confidence": round(confidence, 1),
+            "sentiment": "Neutral",
+            "accuracy": accuracies.get(tkr, None)
         }
-        print(latest[["ticker", "probup"]])
 
+    # =========================
+    # 💾 SAVE
+    # =========================
     with open(file_path, "w") as f:
         json.dump(export, f, indent=2)
 
     print("✅ Updated marketData.json")
 
 
-# 🚀 RUN
 if __name__ == "__main__":
     run_model()

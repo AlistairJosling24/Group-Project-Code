@@ -1,3 +1,5 @@
+import Simulator from "./Simulator";
+
 export default function DecisionPanel({ market, data }) {
   if (!data) return <aside style={styles.panel}>Calculating...</aside>;
 
@@ -20,6 +22,7 @@ export default function DecisionPanel({ market, data }) {
         Based on the latest technical and news data, the AI model has a {data.confidence}% 
         probability for the next price movement.
       </p>
+      <Simulator market={market} data={data} />
     </aside>
   );
 }
