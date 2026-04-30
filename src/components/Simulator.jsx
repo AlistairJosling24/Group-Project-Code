@@ -1,24 +1,39 @@
 import { useState } from "react";
 
-export default function Simulator({ market, data }) {
+export default function Simulator({ data, currency }) {
   const [amount, setAmount] = useState("");
 
-  if (!data) return null;
+  // 💱 same rates as chart
+  const rates = {
+    USD: 1,
+    GBP: 0.79,
+    EUR: 0.92,
+    JPY: 155,
+  };
 
-  const currentPrice = data.historical[data.historical.length - 1];
-  const predictedPrice = data.predicted;
+  const symbols = {
+    USD: "$",
+    GBP: "£",
+    EUR: "€",
+    JPY: "¥",
+  };
 
-  const investment = parseFloat(amount);
+  const rate = rates[currency] || 1;
 
-  let shares = 0;
-  let futureValue = 0;
-  let profit = 0;
+  // 🧠 Convert input → USD → apply prediction → convert back
+  const calculateReturn = () => {
+    if (!amount || !data) return 0;
 
-  if (investment > 0) {
-    shares = investment / currentPrice;
-    futureValue = shares * predictedPrice;
-    profit = futureValue - investment;
-  }
+    const input = parseFloat(amount);
+
+    const usdValue = input / rate; // convert to USD
+    const predictedUSD =
+      usdValue * (data.predicted / data.historical[data.historical.length - 1]);
+
+    return predictedUSD * rate; // convert back to selected currency
+  };
+
+  const result = calculateReturn();
 
   return (
     <div style={styles.container}>
@@ -26,23 +41,17 @@ export default function Simulator({ market, data }) {
 
       <input
         type="number"
-        placeholder="Enter amount ($)"
+        placeholder={`Enter amount (${symbols[currency]})`}
         value={amount}
         onChange={(e) => setAmount(e.target.value)}
         style={styles.input}
       />
 
-      {investment > 0 && (
-        <div style={styles.results}>
-          <p>Shares: {shares.toFixed(4)}</p>
-          <p>Future Value: ${futureValue.toFixed(2)}</p>
-
-          <p style={{
-            color: profit >= 0 ? "#22c55e" : "#ef4444"
-          }}>
-            Profit: ${profit.toFixed(2)}
-          </p>
-        </div>
+      {amount && (
+        <p style={styles.result}>
+          Estimated Value: {symbols[currency]}
+          {result.toFixed(2)}
+        </p>
       )}
     </div>
   );
@@ -52,18 +61,19 @@ const styles = {
   container: {
     marginTop: "20px",
     padding: "15px",
-    backgroundColor: "#020617",
     border: "1px solid #1e293b",
-    borderRadius: "10px"
+    borderRadius: "10px",
   },
   input: {
-    padding: "8px",
     width: "100%",
-    marginTop: "10px",
-    marginBottom: "10px"
+    padding: "10px",
+    borderRadius: "6px",
+    border: "1px solid #1e293b",
+    backgroundColor: "#020617",
+    color: "white",
   },
-  results: {
+  result: {
     marginTop: "10px",
-    color: "#94a3b8"
-  }
+    color: "#22c55e",
+  },
 };

@@ -1,9 +1,20 @@
-export default function Header({ onLogout }) {
+export default function Header({ onLogout, setCurrency }) {
   return (
     <header style={styles.header}>
       <h1 style={styles.logo}>AI Finance</h1>
 
       <div style={styles.right}>
+        {/* 💱 CURRENCY DROPDOWN */}
+        <select
+          onChange={(e) => setCurrency(e.target.value)}
+          style={styles.dropdown}
+        >
+          <option value="USD">USD ($)</option>
+          <option value="GBP">GBP (£)</option>
+          <option value="EUR">EUR (€)</option>
+          <option value="JPY">JPY (¥)</option>
+        </select>
+
         <span style={styles.disclaimer}>Not Financial Advice</span>
 
         <button style={styles.logout} onClick={onLogout}>
@@ -32,6 +43,14 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: "15px",
+  },
+  dropdown: {
+    backgroundColor: "#1e293b",
+    color: "#e5e7eb",
+    border: "none",
+    padding: "6px",
+    borderRadius: "6px",
+    cursor: "pointer",
   },
   disclaimer: {
     fontSize: "0.9rem",

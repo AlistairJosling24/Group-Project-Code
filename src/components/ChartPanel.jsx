@@ -18,45 +18,65 @@ ChartJS.register(
   Legend
 );
 
-export default function ChartPanel({ market, data }) {
+export default function ChartPanel({ market, data, currency }) {
   if (!data) {
     return <main style={{ padding: "20px" }}>Loading...</main>;
   }
+
+  const rates = {
+    USD: 1,
+    GBP: 0.79,
+    EUR: 0.92,
+    JPY: 155,
+  };
+
+  const symbols = {
+    USD: "$",
+    GBP: "£",
+    EUR: "€",
+    JPY: "¥",
+  };
+
+  const rate = rates[currency] || 1;
+
+  const convertedHistorical = data.historical.map(p => p * rate);
+  const convertedPrediction = data.predicted * rate;
 
   const chartData = {
     labels: [...data.labels, "Prediction"],
     datasets: [
       {
-        label: "Historical Price",
-        data: [...data.historical, null],
+        label: `Historical (${currency})`,
+        data: [...convertedHistorical, null],
         borderColor: "#38bdf8",
-        backgroundColor: "transparent",
         tension: 0.3,
       },
       {
         label: "AI Forecast",
         data: [
-          ...Array(data.historical.length - 1).fill(null),
-          data.historical[data.historical.length - 1],
-          data.predicted,
+          ...Array(convertedHistorical.length - 1).fill(null),
+          convertedHistorical[convertedHistorical.length - 1],
+          convertedPrediction,
         ],
         borderColor: data.signal === "BUY" ? "#22c55e" : "#ef4444",
         borderDash: [5, 5],
-        pointRadius: 5,
       },
     ],
   };
 
   const options = {
     responsive: true,
-    maintainAspectRatio: false, // 🔥 allows full height
+    maintainAspectRatio: false,
     scales: {
       x: {
         ticks: { color: "#94a3b8" },
         grid: { color: "#1e293b" },
       },
       y: {
-        ticks: { color: "#94a3b8" },
+        ticks: {
+          color: "#94a3b8",
+          callback: (value) => `${symbols[currency]}${value.toFixed(2)}`,
+        },
         grid: { color: "#1e293b" },
       },
     },
@@ -64,20 +84,28 @@ export default function ChartPanel({ market, data }) {
       legend: {
         labels: { color: "#e5e7eb" },
       },
+      tooltip: {
+        callbacks: {
+          label: (context) =>
+            `${symbols[currency]}${context.raw.toFixed(2)}`,
+        },
+      },
     },
   };
 
   return (
     <main style={styles.container}>
-      <h2>{market} / USD</h2>
+      <h2>
+        {market} / {currency} ({symbols[currency]})
+      </h2>
 
       <div style={styles.chartWrapper}>
         <Line data={chartData} options={options} />
       </div>
 
-      <div style={styles.footer}>
-        <p>Sentiment Score: {data.sentiment}</p>
-      </div>
+      <p style={styles.footer}>
+        Sentiment: {data.sentiment}
+      </p>
     </main>
   );
 }
